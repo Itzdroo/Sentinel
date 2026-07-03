@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Smart Contract Flow Analyzer</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js" defer></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <h1>Smart Contract Flow Analyzer</h1>
+        <span>Tool B</span>
+      </div>
+      <div class="status-pill" id="status-pill">Idle</div>
+    </header>
+
+    <main class="app-shell">
+      <section class="query-panel" aria-label="Analysis query">
+        <form id="analyze-form" class="query-form">
+          <input id="analysis-profile" type="hidden" name="analysis_profile" value="incident_response" />
+          <section class="feature-selector" aria-label="Analysis workflow">
+            <button type="button" class="feature-card" data-profile="defi_audit">
+              <i data-lucide="route"></i>
+              <strong>DeFi Protocol Auditing</strong>
+              <span>Trace fund flows through complex swap routers and liquidity pools for security reviews.</span>
+            </button>
+            <button type="button" class="feature-card active" data-profile="incident_response">
+              <i data-lucide="bell-ring"></i>
+              <strong>Incident Response</strong>
+              <span>Rapidly map attacker fund dispersal post-exploit, enabling faster response and recovery.</span>
+            </button>
+            <button type="button" class="feature-card" data-profile="compliance_reporting">
+              <i data-lucide="clipboard-list"></i>
+              <strong>Compliance Reporting</strong>
+              <span>Generate transparent, visual transaction reports for regulatory and internal audit workflows.</span>
+            </button>
+          </section>
+
+          <label>
+            <span>Address or transaction hash</span>
+            <input
+              id="target"
+              name="target"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="0x..."
+              required
+              minlength="42"
+              maxlength="66"
+            />
+          </label>
+
+          <div class="field-grid">
+            <label>
+              <span>From block</span>
+              <input id="from-block" name="from_block" type="number" min="0" required />
+            </label>
+            <label>
+              <span>To block</span>
+              <input id="to-block" name="to_block" value="latest" required />
+            </label>
+            <label>
+              <span>Max depth</span>
+              <input id="max-depth" name="max_depth" type="number" min="0" max="4" value="1" />
+            </label>
+            <label>
+              <span>Window</span>
+              <input id="window" name="narrow_block_window" type="number" min="0" max="100" value="2" />
+            </label>
+            <label>
+              <span>Incident time</span>
+              <input id="incident-started-at" name="incident_started_at" type="datetime-local" />
+            </label>
+            <label>
+              <span>Complaint time</span>
+              <input id="complaint-received-at" name="complaint_received_at" type="datetime-local" />
+            </label>
+          </div>
+
+          <label class="check-row">
+            <input id="use-cache" name="use_cache" type="checkbox" value="true" checked />
+            <span>Use local cache</span>
+          </label>
+
+          <button id="submit-button" type="submit">Analyze Flow</button>
+          <button id="cancel-button" type="button" disabled>Cancel</button>
+        </form>
+
+        <div class="stats-grid" id="stats-grid">
+          <div><strong>0</strong><span>Nodes</span></div>
+          <div><strong>0</strong><span>Links</span></div>
+          <div><strong>0</strong><span>Logs</span></div>
+          <div><strong>0</strong><span>Findings</span></div>
+        </div>
+      </section>
+
+      <section class="workspace" aria-label="Flow graph">
+        <div class="toolbar">
+          <div class="segmented">
+            <button type="button" class="active" data-mode="sankey">Sankey</button>
+            <button type="button" data-mode="node-link">Node Link</button>
+          </div>
+          <div class="toolbar-actions">
+            <select id="export-format" aria-label="Export format">
+              <option value="json">JSON</option>
+              <option value="pdf">PDF</option>
+            </select>
+            <button type="button" id="export-report" disabled>Export</button>
+            <button type="button" id="reset-zoom">Reset View</button>
+          </div>
+        </div>
+        <div id="chart" class="chart empty-state">
+          <div id="graph-banner" class="graph-banner">Awaiting analysis</div>
+        </div>
+      </section>
+
+      <aside class="side-panel" aria-label="Findings">
+        <section>
+          <div class="panel-heading">
+            <h2>Report</h2>
+          </div>
+          <div id="report-panel" class="report-panel muted">None</div>
+        </section>
+        <section>
+          <h2>Anomalies</h2>
+          <div id="anomaly-list" class="finding-list muted">None</div>
+        </section>
+        <section>
+          <h2>Warnings</h2>
+          <div id="warning-list" class="finding-list muted">None</div>
+        </section>
+      </aside>
+    </main>
+  </body>
+</html>
