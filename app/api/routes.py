@@ -17,6 +17,15 @@ def get_analyzer(request: Request) -> FlowAnalyzer:
     return request.app.state.analyzer
 
 
+def parse_optional_datetime(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+    return datetime.fromisoformat(trimmed)
+
+
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -31,8 +40,8 @@ async def analyze_get(
     narrow_block_window: int = Query(2, ge=0, le=100),
     analysis_profile: AnalysisProfile = Query("incident_response"),
     use_cache: bool = Query(True),
-    incident_started_at: datetime | None = Query(None),
-    complaint_received_at: datetime | None = Query(None),
+    incident_started_at: str | None = Query(None),
+    complaint_received_at: str | None = Query(None),
     analyzer: FlowAnalyzer = Depends(get_analyzer),
 ) -> SankeyPayload:
     request = AnalyzeRequest(
@@ -43,8 +52,8 @@ async def analyze_get(
         narrow_block_window=narrow_block_window,
         analysis_profile=analysis_profile,
         use_cache=use_cache,
-        incident_started_at=incident_started_at,
-        complaint_received_at=complaint_received_at,
+        incident_started_at=parse_optional_datetime(incident_started_at),
+        complaint_received_at=parse_optional_datetime(complaint_received_at),
     )
     return await _run_analysis(analyzer, request)
 

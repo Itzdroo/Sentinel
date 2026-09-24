@@ -72,6 +72,19 @@ python -m uvicorn app.main:app --reload
 
 Open `http://127.0.0.1:8000`.
 
+## Run with Docker
+
+Docker Compose keeps the SQLite analysis cache in a named volume and reads RPC configuration from the host environment or a local `.env` file. Never commit `.env` or put provider credentials in the image.
+
+```powershell
+$env:ETHEREUM_RPC_URL="https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
+docker compose up --build
+```
+
+Open `http://127.0.0.1:8000`; check `http://127.0.0.1:8000/api/health` for the container health endpoint. Stop the service with `Ctrl+C`, then run `docker compose down` when finished. The named `analyzer-data` volume preserves cached results across container rebuilds.
+
+To set environment variables persistently for Compose, create a local `.env` file from the variable names in `compose.yaml`. Keep that file private; `.env` files are excluded from the Docker build context and Git.
+
 ## API
 
 ### Health
@@ -102,6 +115,15 @@ Query parameters:
 4. Heuristic analysis for suspicious behavior
 5. D3 serialization for the frontend
 
+The shared feature interface in `app/services/feature_store.py` emits deterministic, versioned wallet feature vectors (`sentinel.transfer.v1`) and the same heuristic findings consumed by the visual report. Feature vectors contain descriptive transfer metrics; anomaly labels stay separate so future ML training can choose its own target without label leakage. A future model can consume `FeatureStore.extract_wallet_features(...)` and pin its input contract to `schema_version`.
+
+## Cache and Logs
+
+- Analysis responses are cached in SQLite by normalized request and provider fingerprint, with a configurable TTL. The schema version is part of the cache key, so feature contract changes naturally invalidate older entries.
+- Token metadata and block timestamps are cached in memory for the lifetime of a backend process; Etherscan ABI lookups use a process-local cache too.
+- SQLite uses WAL mode and a busy timeout for concurrent requests, and successful writes prune expired rows when TTL is enabled.
+- Backend request, RPC failure, and finding events are emitted as structured JSON logs. Request logs omit query strings, and RPC log entries omit exception text and provider URLs so API credentials are not copied into logs.
+
 ## Output Files
 
 - JSON export includes metadata, report text, anomalies, nodes, and links
@@ -122,4 +144,3 @@ Set these env vars if needed:
 - The graph intentionally shows clue nodes first so detectives are not buried in raw wallet noise.
 - The timeline filter helps when the complaint arrives long after the fraud window.
 - Exchange wallets are flagged across all three reporting modes.
-

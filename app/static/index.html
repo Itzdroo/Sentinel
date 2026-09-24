@@ -14,7 +14,6 @@
     <header class="topbar">
       <div class="brand">
         <h1>Smart Contract Flow Analyzer</h1>
-        <span>Tool B</span>
       </div>
       <div class="status-pill" id="status-pill">Idle</div>
     </header>
@@ -26,18 +25,18 @@
           <section class="feature-selector" aria-label="Analysis workflow">
             <button type="button" class="feature-card" data-profile="defi_audit">
               <i data-lucide="route"></i>
-              <strong>DeFi Protocol Auditing</strong>
-              <span>Trace fund flows through complex swap routers and liquidity pools for security reviews.</span>
+              <strong>Smart Contract Behavior Analysis</strong>
+              <span>Reconstruct how routers, pools, and wallets behaved instead of only listing addresses.</span>
             </button>
             <button type="button" class="feature-card active" data-profile="incident_response">
               <i data-lucide="bell-ring"></i>
-              <strong>Incident Response</strong>
-              <span>Rapidly map attacker fund dispersal post-exploit, enabling faster response and recovery.</span>
+              <strong>Automated Exploit Reconstruction</strong>
+              <span>Map the exploit path, suspicious wallets, and timeline so detectives can explain what happened.</span>
             </button>
             <button type="button" class="feature-card" data-profile="compliance_reporting">
               <i data-lucide="clipboard-list"></i>
-              <strong>Compliance Reporting</strong>
-              <span>Generate transparent, visual transaction reports for regulatory and internal audit workflows.</span>
+              <strong>DeFi Investigation Workflow</strong>
+              <span>Generate evidence-ready reports and heuristic clues for audits, compliance, and case review.</span>
             </button>
           </section>
 
@@ -116,6 +115,7 @@
         </div>
         <div id="chart" class="chart empty-state">
           <div id="graph-banner" class="graph-banner">Awaiting analysis</div>
+          <div id="graph-popup" class="graph-popup hidden" aria-live="polite"></div>
         </div>
       </section>
 

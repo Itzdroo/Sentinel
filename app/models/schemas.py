@@ -82,11 +82,16 @@ class GraphNode(BaseModel):
 
     id: str
     label: str
+    kind: Literal["wallet", "transaction"] = "wallet"
+    subtitle: str | None = None
+    detail: str | None = None
     total_in: float = 0.0
     total_out: float = 0.0
     role: str | None = None
     tags: list[str] = Field(default_factory=list)
     risk_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    tx_hashes: list[str] = Field(default_factory=list)
+    report_hint: str | None = None
 
 
 class GraphLink(BaseModel):
@@ -98,6 +103,7 @@ class GraphLink(BaseModel):
     tx_hash: str
     tx_hashes: list[str] = Field(default_factory=list)
     token: str
+    kind: Literal["wallet_to_transaction", "transaction_to_wallet", "wallet_to_wallet"] = "wallet_to_transaction"
     asset_standard: str = ""
     event_type: str = ""
     token_id: int | None = None
@@ -108,13 +114,31 @@ class GraphLink(BaseModel):
 class AnomalyFinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["peeling_chain", "splitter_mixer"]
+    type: Literal["peeling_chain", "splitter_mixer", "flash_loan", "liquidity_drain", "rug_pull", "bridge_activity"]
     severity: Literal["low", "medium", "high"]
     description: str
     node: str | None = None
     path: list[str] = Field(default_factory=list)
     tx_hashes: list[str] = Field(default_factory=list)
     evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class WalletFeatureVector(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str
+    address: str
+    contract_address: str
+    token_symbol: str
+    event_count: int = Field(ge=0)
+    total_in: float = Field(ge=0)
+    total_out: float = Field(ge=0)
+    unique_counterparty_count: int = Field(ge=0)
+    out_in_ratio: float = Field(ge=0)
+    max_outgoing_fanout: int = Field(ge=0)
+    max_same_block_in_out_ratio: float = Field(ge=0, le=1)
+    first_block: int | None = Field(default=None, ge=0)
+    last_block: int | None = Field(default=None, ge=0)
 
 
 class ProtocolRoleFinding(BaseModel):
@@ -133,6 +157,18 @@ class ProtocolRoleFinding(BaseModel):
     evidence: dict[str, Any] = Field(default_factory=dict)
 
 
+class RankedDispersalCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    address: str
+    rank: int = Field(ge=1)
+    score: float = Field(ge=0.0, le=1.0)
+    total_value: float = Field(default=0.0, ge=0.0)
+    hops: int = Field(default=1, ge=1)
+    is_exchange: bool = False
+    justification: str
+
+
 class UseCaseReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -143,6 +179,8 @@ class UseCaseReport(BaseModel):
     highlights: list[str] = Field(default_factory=list)
     recommended_actions: list[str] = Field(default_factory=list)
     protocol_roles: list[ProtocolRoleFinding] = Field(default_factory=list)
+    ranked_dispersal_candidates: list[RankedDispersalCandidate] = Field(default_factory=list)
+    report_version: str = "1.1.0"
 
 
 class AnalysisMetadata(BaseModel):
@@ -165,6 +203,9 @@ class AnalysisMetadata(BaseModel):
     cache_status: Literal["disabled", "hit", "miss"] = "disabled"
     timeline_start_at: datetime | None = None
     timeline_end_at: datetime | None = None
+    feature_schema_version: str = "sentinel.transfer.v1"
+    feature_count: int = Field(default=0, ge=0)
+    report_version: str = "1.1.0"
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -174,5 +215,6 @@ class SankeyPayload(BaseModel):
     nodes: list[GraphNode]
     links: list[GraphLink]
     anomalies: list[AnomalyFinding]
+    wallet_features: list[WalletFeatureVector] = Field(default_factory=list)
     report: UseCaseReport
     metadata: AnalysisMetadata

@@ -3,7 +3,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+
+load_dotenv(override=True)  # always prefer .env over stale session env vars
 
 
 APP_DIR = Path(__file__).resolve().parents[1]

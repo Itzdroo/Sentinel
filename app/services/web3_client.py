@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import logging
 from typing import Any
 
 from web3 import Web3
@@ -60,6 +61,9 @@ ERC721_NAME_ABI: list[dict[str, Any]] = [
 ]
 
 
+logger = logging.getLogger(__name__)
+
+
 class EthereumClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -73,11 +77,13 @@ class EthereumClient:
 
     def ensure_connected(self) -> None:
         try:
-            connected = self.w3.is_connected()
+            _ = self.w3.eth.chain_id  # real round-trip RPC call; is_connected() silently returns False on HTTPS
         except Exception as exc:
+            logger.error(
+                "rpc_call_failed",
+                extra={"event_name": "rpc_failure", "action": "check provider connection", "error_type": type(exc).__name__},
+            )
             raise RpcConnectionError("Could not reach Ethereum RPC provider", details={"error": str(exc)}) from exc
-        if not connected:
-            raise RpcConnectionError("Ethereum RPC provider is not connected")
 
     def checksum_address(self, address: str) -> str:
         try:
@@ -201,6 +207,10 @@ class EthereumClient:
         try:
             return retry_with_backoff(operation, should_retry=lambda exc: is_retryable_message(str(exc)))
         except Exception as exc:
+            logger.error(
+                "rpc_call_failed",
+                extra={"event_name": "rpc_failure", "action": action, "error_type": type(exc).__name__},
+            )
             raise RpcQueryError(f"RPC failed while attempting to {action}", details={"error": str(exc)}) from exc
 
     @staticmethod

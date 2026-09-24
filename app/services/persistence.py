@@ -10,7 +10,7 @@ from typing import Any
 from app.models.schemas import AnalyzeRequest, SankeyPayload
 
 
-SCHEMA_VERSION = "tool-b-cache-v1"
+SCHEMA_VERSION = "tool-b-cache-v2-feature-store-v1"
 
 
 class AnalysisCache:
@@ -22,7 +22,7 @@ class AnalysisCache:
 
     def get(self, request: AnalyzeRequest, *, provider_fingerprint: str) -> SankeyPayload | None:
         cache_key = self.cache_key(request, provider_fingerprint=provider_fingerprint)
-        with sqlite3.connect(self.db_path) as connection:
+        with self._connect() as connection:
             row = connection.execute(
                 "select created_at, payload_json from analysis_cache where cache_key = ?",
                 (cache_key,),
@@ -44,7 +44,13 @@ class AnalysisCache:
         cache_key = self.cache_key(request, provider_fingerprint=provider_fingerprint)
         payload_json = payload.model_dump_json()
         request_json = json.dumps(self._request_fingerprint(request), sort_keys=True, separators=(",", ":"))
-        with sqlite3.connect(self.db_path) as connection:
+        now = int(time.time())
+        with self._connect() as connection:
+            if self.ttl_seconds > 0:
+                connection.execute(
+                    "delete from analysis_cache where created_at < ?",
+                    (now - self.ttl_seconds,),
+                )
             connection.execute(
                 """
                 insert into analysis_cache(cache_key, created_at, request_json, payload_json)
@@ -54,12 +60,12 @@ class AnalysisCache:
                     request_json = excluded.request_json,
                     payload_json = excluded.payload_json
                 """,
-                (cache_key, int(time.time()), request_json, payload_json),
+                (cache_key, now, request_json, payload_json),
             )
             connection.commit()
 
     def delete(self, cache_key: str) -> None:
-        with sqlite3.connect(self.db_path) as connection:
+        with self._connect() as connection:
             connection.execute("delete from analysis_cache where cache_key = ?", (cache_key,))
             connection.commit()
 
@@ -73,7 +79,8 @@ class AnalysisCache:
         return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     def _initialize(self) -> None:
-        with sqlite3.connect(self.db_path) as connection:
+        with self._connect() as connection:
+            connection.execute("pragma journal_mode = WAL")
             connection.execute(
                 """
                 create table if not exists analysis_cache (
@@ -86,6 +93,11 @@ class AnalysisCache:
             )
             connection.execute("create index if not exists idx_analysis_cache_created_at on analysis_cache(created_at)")
             connection.commit()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.db_path, timeout=10)
+        connection.execute("pragma busy_timeout = 10000")
+        return connection
 
     @staticmethod
     def _request_fingerprint(request: AnalyzeRequest) -> dict[str, Any]:

@@ -1,6 +1,10 @@
 const state = {
   payload: null,
   mode: "sankey",
+  showAllNodes: false,
+  legendDismissed: false,
+  candidateListExpanded: false,
+  selectedCandidate: null,
   svg: null,
   zoom: null,
   simulation: null,
@@ -21,6 +25,7 @@ const reportPanel = document.querySelector("#report-panel");
 const exportReportButton = document.querySelector("#export-report");
 const exportFormat = document.querySelector("#export-format");
 const graphBanner = document.querySelector("#graph-banner");
+const graphPopup = document.querySelector("#graph-popup");
 const cacheInput = document.querySelector("#use-cache");
 const cancelButton = document.querySelector("#cancel-button");
 
@@ -92,7 +97,11 @@ async function fetchAnalysis() {
   const formData = new FormData(form);
   const params = new URLSearchParams();
   for (const [key, value] of formData.entries()) {
-    params.set(key, String(value).trim());
+    const trimmed = String(value).trim();
+    if (trimmed === "") {
+      continue;
+    }
+    params.set(key, trimmed);
   }
   params.set("use_cache", cacheInput.checked ? "true" : "false");
 
@@ -109,6 +118,9 @@ async function fetchAnalysis() {
       throw new Error(message);
     }
     state.payload = data;
+    // Default showAllNodes to false for Incident Response profile
+    state.showAllNodes = data.metadata?.analysis_profile !== "incident_response";
+    state.candidateListExpanded = false;
     exportReportButton.disabled = false;
     cancelButton.disabled = true;
     setStatus(data.metadata?.cache_status === "hit" ? "Cached" : "Ready");
@@ -145,16 +157,46 @@ function renderGraphBanner(payload) {
   const shownNodes = metadata.visible_graph_node_count || metadata.graph_node_count || 0;
   const fullNodes = metadata.full_graph_node_count || metadata.graph_node_count || shownNodes;
   const hiddenNodes = Math.max(0, fullNodes - shownNodes);
+  const visibleWallets = (payload.nodes || []).filter((node) => node.kind === "wallet").length;
+  const visibleTxs = (payload.nodes || []).filter((node) => node.kind === "transaction").length;
   const timelineStart = metadata.timeline_start_at ? new Date(metadata.timeline_start_at).toLocaleString() : null;
   const timelineEnd = metadata.timeline_end_at ? new Date(metadata.timeline_end_at).toLocaleString() : null;
   graphBanner.className = "graph-banner";
   graphBanner.replaceChildren();
+
+  const titleRow = document.createElement("div");
+  titleRow.style.display = "flex";
+  titleRow.style.alignItems = "center";
+  titleRow.style.justifyContent = "space-between";
+
   const title = document.createElement("strong");
   title.textContent = payload.report?.title || "Graph";
+
+  // Feature 1: Filter toggle button
+  const toggleBtn = document.createElement("button");
+  toggleBtn.className = `filter-toggle-btn ${!state.showAllNodes ? "filtered" : ""}`;
+  const totalCount = payload.nodes?.length || 0;
+
+  const displayPayload = filterPayloadData(payload, state.showAllNodes);
+  const signalCount = displayPayload.nodes?.length || 0;
+
+  toggleBtn.innerHTML = state.showAllNodes
+    ? `<span>Show Signal Only (${signalCount})</span>`
+    : `<span>Filtered View (${signalCount}/${totalCount} nodes) — Show All</span>`;
+
+  toggleBtn.addEventListener("click", () => {
+    state.showAllNodes = !state.showAllNodes;
+    renderGraphBanner(payload);
+    renderChart(payload);
+  });
+
+  titleRow.append(title, toggleBtn);
+
   const summary = document.createElement("span");
   const timelineText = timelineStart || timelineEnd ? ` Timeline: ${timelineStart || "start"} to ${timelineEnd || "end"}.` : "";
-  summary.textContent = `${payload.report?.summary || "No summary available."}${timelineText} ${hiddenNodes ? `Showing ${shownNodes} clue nodes, hiding ${hiddenNodes} others.` : `Showing ${shownNodes} nodes.`}`;
-  graphBanner.append(title, summary);
+  const viewText = `CCTV view: ${visibleWallets} wallet clues and ${visibleTxs} transaction hops.`;
+  summary.textContent = `${payload.report?.summary || "No summary available."}${timelineText} ${viewText}${hiddenNodes ? ` Hidden background nodes: ${hiddenNodes}.` : ""}`;
+  graphBanner.append(titleRow, summary);
 }
 
 function renderReport(report) {
@@ -170,15 +212,29 @@ function renderReport(report) {
   summary.textContent = report.summary;
   const metricGrid = document.createElement("div");
   metricGrid.className = "mini-metrics";
+
   metricGrid.replaceChildren(...Object.entries(report.key_metrics || {}).map(([key, value]) => {
     const metric = document.createElement("div");
     const label = document.createElement("span");
     const strong = document.createElement("strong");
     label.textContent = titleCase(key);
     strong.textContent = value === null || value === undefined ? "n/a" : String(value);
+
+    // Feature 2: Dispersal Candidate Count card is expandable
+    if (key === "dispersal_candidate_count" && report.ranked_dispersal_candidates?.length) {
+      metric.classList.add("interactive");
+      label.textContent = "Dispersal Candidates ▾";
+      metric.title = "Click to toggle ranked candidate list";
+      metric.addEventListener("click", () => {
+        state.candidateListExpanded = !state.candidateListExpanded;
+        renderReport(report);
+      });
+    }
+
     metric.append(label, strong);
     return metric;
   }));
+
   const highlights = document.createElement("div");
   highlights.className = "report-lines";
   highlights.replaceChildren(...(report.highlights || []).map((line) => {
@@ -186,6 +242,7 @@ function renderReport(report) {
     item.textContent = line;
     return item;
   }));
+
   const actions = document.createElement("div");
   actions.className = "report-lines compact";
   actions.replaceChildren(...(report.recommended_actions || []).map((line) => {
@@ -193,7 +250,38 @@ function renderReport(report) {
     item.textContent = line;
     return item;
   }));
-  reportPanel.replaceChildren(title, summary, metricGrid, highlights, actions);
+
+  reportPanel.replaceChildren(title, summary, metricGrid);
+
+  // Feature 2: Expandable Candidate List container
+  if (state.candidateListExpanded && report.ranked_dispersal_candidates?.length) {
+    const candidateContainer = document.createElement("div");
+    candidateContainer.className = "dispersal-list-container";
+
+    report.ranked_dispersal_candidates.forEach((cand) => {
+      const card = document.createElement("div");
+      card.className = `candidate-card ${cand.is_exchange ? "exchange" : ""}`;
+      card.innerHTML = `
+        <div class="candidate-rank-badge">${cand.rank}</div>
+        <div class="candidate-info">
+          <div class="candidate-addr">${formatAddress(cand.address)}</div>
+          <div class="candidate-justification">${escapeHtml(cand.justification)}</div>
+        </div>
+        <div class="candidate-score-badge">${Math.round(cand.score * 100)}% Score</div>
+      `;
+
+      card.addEventListener("click", () => {
+        state.selectedCandidate = cand.address;
+        highlightAndCenterNode(cand.address);
+      });
+
+      candidateContainer.append(card);
+    });
+
+    reportPanel.append(candidateContainer);
+  }
+
+  reportPanel.append(highlights, actions);
 }
 
 function renderStats(payload) {
@@ -251,17 +339,23 @@ function renderWarnings(warnings) {
   }));
 }
 
-function renderChart(payload) {
-  if (!payload.nodes?.length || !payload.links?.length) {
+function renderChart(rawPayload) {
+  if (!rawPayload.nodes?.length || !rawPayload.links?.length) {
     chart.className = "chart empty-state";
     chart.textContent = "No transfer flow found";
+    hideGraphPopup();
     return;
   }
+
+  const payload = filterPayloadData(rawPayload, state.showAllNodes);
+
   if (state.mode === "node-link") {
     renderNodeLink(payload);
-    return;
+  } else {
+    renderSankey(payload);
   }
-  renderSankey(payload);
+
+  renderLegendOverlay();
 }
 
 function renderSankey(payload) {
@@ -281,7 +375,6 @@ function renderSankey(payload) {
     const graph = layout({ nodes, links });
     const maxValue = d3.max(graph.links, (link) => link.value) || 1;
     const linkColor = d3.scaleSequentialLog(d3.interpolatePuBuGn).domain([Math.max(maxValue, 1e-12), 1e-12]);
-    const nodeColor = nodeColorScale();
 
     viewport.append("g")
       .attr("fill", "none")
@@ -291,15 +384,16 @@ function renderSankey(payload) {
       .attr("class", "graph-link")
       .attr("d", d3.sankeyLinkHorizontal())
       .attr("stroke", (link) => linkColor(Math.max(link.value, 1e-12)))
-      .attr("stroke-width", (link) => Math.max(1, link.width))
-      .attr("stroke-opacity", 0.52)
+      .attr("stroke-width", (link) => Math.max(1.5, link.width))
+      .attr("stroke-opacity", 0.55)
       .append("title")
       .text((link) => linkTooltip(link));
 
     const node = viewport.append("g")
       .selectAll("g")
       .data(graph.nodes)
-      .join("g");
+      .join("g")
+      .attr("class", "sankey-node");
 
     node.append("rect")
       .attr("x", (item) => item.x0)
@@ -307,9 +401,9 @@ function renderSankey(payload) {
       .attr("height", (item) => Math.max(1, item.y1 - item.y0))
       .attr("width", (item) => item.x1 - item.x0)
       .attr("rx", 3)
-      .attr("fill", (item) => nodeFill(item, nodeColor))
+      .attr("fill", (item) => nodeFill(item, payload))
       .attr("stroke", "#1e2428")
-      .attr("stroke-opacity", 0.18)
+      .attr("stroke-opacity", 0.25)
       .append("title")
       .text((item) => nodeTooltip(item));
 
@@ -320,6 +414,8 @@ function renderSankey(payload) {
       .attr("dy", "0.35em")
       .attr("text-anchor", (item) => item.x0 < width / 2 ? "start" : "end")
       .text((item) => nodeLabel(item));
+
+    bindNodeInteractions(node, payload);
   } catch (error) {
     renderNodeLink(payload);
   }
@@ -337,8 +433,7 @@ function renderNodeLink(payload) {
       target: nodes[link.target].id,
     }));
   const maxValue = d3.max(links, (link) => link.value) || 1;
-  const widthScale = d3.scaleSqrt().domain([0, maxValue]).range([1, 9]);
-  const nodeColor = nodeColorScale();
+  const widthScale = d3.scaleSqrt().domain([0, maxValue]).range([1.5, 8.5]);
 
   const link = viewport.append("g")
     .attr("stroke", "#667077")
@@ -354,20 +449,21 @@ function renderNodeLink(payload) {
     .selectAll("g")
     .data(nodes)
     .join("g")
+    .attr("class", "node-group")
     .call(dragSimulation());
 
   node.append("circle")
-    .attr("r", (item) => Math.max(6, Math.min(18, Math.sqrt((item.total_in || 0) + (item.total_out || 0)) + 5)))
-    .attr("fill", (item) => nodeFill(item, nodeColor))
+    .attr("r", (item) => Math.max(7, Math.min(20, Math.sqrt((item.total_in || 0) + (item.total_out || 0)) + 6)))
+    .attr("fill", (item) => nodeFill(item, payload))
     .attr("stroke", "#1e2428")
-    .attr("stroke-opacity", 0.18);
+    .attr("stroke-opacity", 0.25);
 
   node.append("title")
     .text((item) => nodeTooltip(item));
 
   node.append("text")
     .attr("class", "node-label")
-    .attr("x", 12)
+    .attr("x", 14)
     .attr("y", 4)
     .text((item) => nodeLabel(item));
 
@@ -389,6 +485,8 @@ function renderNodeLink(payload) {
       node.attr("transform", (item) => `translate(${item.x},${item.y})`);
     });
   state.simulation = simulation;
+
+  bindNodeInteractions(node, payload);
 
   function dragSimulation() {
     function dragstarted(event, item) {
@@ -413,9 +511,180 @@ function renderNodeLink(payload) {
   }
 }
 
+function getNodeRiskCategory(item, payload) {
+  if (item.kind === "transaction") return "transaction";
+  const targetAddress = (payload?.metadata?.target || "").toLowerCase();
+  if (item.id.toLowerCase() === targetAddress) return "root";
+
+  const isHighRisk = (item.risk_score || 0) >= 0.75 ||
+    item.tags?.includes("anomaly_path") ||
+    item.tags?.includes("peeling_chain") ||
+    item.tags?.includes("splitter_mixer") ||
+    item.tags?.includes("liquidity_drain") ||
+    item.tags?.includes("flash_loan");
+
+  if (isHighRisk) return "high";
+
+  const isExchange = item.role === "exchange_candidate" ||
+    item.role === "bridge_candidate" ||
+    item.tags?.includes("exchange_candidate") ||
+    item.tags?.includes("bridge_candidate");
+
+  if (isExchange) return "exchange";
+
+  return "standard";
+}
+
+function getNodeFillColor(category) {
+  switch (category) {
+    case "root": return "#2563eb";
+    case "high": return "#dc2626";
+    case "exchange": return "#d97706";
+    case "standard": return "#64748b";
+    case "transaction": return "#334155";
+    default: return "#64748b";
+  }
+}
+
+function nodeFill(item, payload) {
+  const category = getNodeRiskCategory(item, payload);
+  return getNodeFillColor(category);
+}
+
+function filterPayloadData(payload, showAll) {
+  if (showAll || !payload?.nodes?.length) return payload;
+
+  const targetAddress = (payload.metadata?.target || "").toLowerCase();
+  const signalNodeIds = new Set();
+
+  payload.nodes.forEach((node) => {
+    const cat = getNodeRiskCategory(node, payload);
+    if (cat === "root" || cat === "high" || cat === "exchange") {
+      signalNodeIds.add(node.id.toLowerCase());
+    }
+  });
+
+  if (!signalNodeIds.size) {
+    payload.nodes.slice(0, 10).forEach((node) => signalNodeIds.add(node.id.toLowerCase()));
+  }
+
+  const links = payload.links || [];
+  links.forEach((link) => {
+    const srcId = (typeof link.source === "object" ? link.source.id : payload.nodes[link.source]?.id || "").toLowerCase();
+    const tgtId = (typeof link.target === "object" ? link.target.id : payload.nodes[link.target]?.id || "").toLowerCase();
+    if (signalNodeIds.has(srcId) || signalNodeIds.has(tgtId)) {
+      if (srcId) signalNodeIds.add(srcId);
+      if (tgtId) signalNodeIds.add(tgtId);
+    }
+  });
+
+  const filteredNodes = payload.nodes.filter((n) => signalNodeIds.has(n.id.toLowerCase()));
+  const filteredNodeIdSet = new Set(filteredNodes.map((n) => n.id));
+  const nodeIndexMap = new Map(filteredNodes.map((n, idx) => [n.id, idx]));
+
+  const filteredLinks = links
+    .filter((link) => {
+      const srcId = typeof link.source === "object" ? link.source.id : payload.nodes[link.source]?.id;
+      const tgtId = typeof link.target === "object" ? link.target.id : payload.nodes[link.target]?.id;
+      return filteredNodeIdSet.has(srcId) && filteredNodeIdSet.has(tgtId);
+    })
+    .map((link) => {
+      const srcId = typeof link.source === "object" ? link.source.id : payload.nodes[link.source]?.id;
+      const tgtId = typeof link.target === "object" ? link.target.id : payload.nodes[link.target]?.id;
+      return {
+        ...link,
+        source: nodeIndexMap.get(srcId),
+        target: nodeIndexMap.get(tgtId),
+      };
+    });
+
+  return {
+    ...payload,
+    nodes: filteredNodes,
+    links: filteredLinks,
+  };
+}
+
+function renderLegendOverlay() {
+  if (state.legendDismissed) return;
+
+  const existing = chart.querySelector(".graph-legend");
+  if (existing) existing.remove();
+
+  const legend = document.createElement("div");
+  legend.className = "graph-legend";
+  legend.innerHTML = `
+    <div class="graph-legend-title">
+      <span>Risk Legend</span>
+      <button class="graph-legend-close" title="Dismiss legend">&times;</button>
+    </div>
+    <div class="legend-item"><span class="legend-dot root"></span> Root Target</div>
+    <div class="legend-item"><span class="legend-dot high"></span> High Severity Finding</div>
+    <div class="legend-item"><span class="legend-dot exchange"></span> Exchange / Bridge Touchpoint</div>
+    <div class="legend-item"><span class="legend-dot standard"></span> Standard Recipient</div>
+  `;
+
+  legend.querySelector(".graph-legend-close").addEventListener("click", () => {
+    state.legendDismissed = true;
+    legend.remove();
+  });
+
+  chart.append(legend);
+}
+
+function highlightAndCenterNode(address) {
+  if (!state.svg || !address) return;
+  const targetLower = address.toLowerCase();
+
+  state.svg.selectAll(".pulsing-ring").remove();
+
+  if (state.mode === "node-link") {
+    const nodeSelection = state.svg.selectAll("g.node-group");
+    let targetData = null;
+
+    nodeSelection.each(function (d) {
+      if (d && d.id && d.id.toLowerCase() === targetLower) {
+        targetData = d;
+        const group = d3.select(this);
+        group.append("circle")
+          .attr("class", "pulsing-ring")
+          .attr("cx", 0)
+          .attr("cy", 0)
+          .attr("r", 12);
+      }
+    });
+
+    if (targetData && state.zoom && (targetData.x !== undefined)) {
+      const { width, height } = chartSize();
+      const scale = 1.5;
+      const transform = d3.zoomIdentity
+        .translate(width / 2 - targetData.x * scale, height / 2 - targetData.y * scale)
+        .scale(scale);
+      state.svg.transition().duration(600).call(state.zoom.transform, transform);
+    }
+  } else {
+    const nodeSelection = state.svg.selectAll("g.sankey-node");
+    nodeSelection.each(function (d) {
+      if (d && d.id && d.id.toLowerCase() === targetLower) {
+        const group = d3.select(this);
+        const rect = group.select("rect");
+        if (!rect.empty()) {
+          rect.transition().duration(200)
+            .attr("stroke", "#dc2626")
+            .attr("stroke-width", 3)
+            .transition().duration(2000)
+            .attr("stroke", "#1e2428")
+            .attr("stroke-width", 1);
+        }
+      }
+    });
+  }
+}
+
 function resetSvg(width, height) {
   chart.className = "chart";
   chart.replaceChildren();
+  hideGraphPopup();
   if (state.simulation) {
     state.simulation.stop();
     state.simulation = null;
@@ -447,41 +716,20 @@ function linkTooltip(link) {
   return `${link.token} ${formatAmount(link.value)}\nTransfers: ${link.transfer_count}\n${tx}`;
 }
 
-function nodeColorScale() {
-  return d3.scaleOrdinal(["#087f8c", "#bc7a00", "#4067b1", "#41734f", "#8758a8", "#c25d4c"]);
-}
-
-function nodeFill(item, nodeColor) {
-  if (item.tags?.includes("anomaly_path")) {
-    return "#b43c35";
-  }
-  if (item.role === "liquidity_pool_candidate") {
-    return "#087f8c";
-  }
-  if (item.role === "swap_router_candidate") {
-    return "#4067b1";
-  }
-  if (item.role === "dispersal_hub") {
-    return "#bc7a00";
-  }
-  if (item.role === "collector_wallet") {
-    return "#41734f";
-  }
-  return nodeColor(item.id);
-}
-
 function nodeTooltip(item) {
   const role = item.role ? `\nRole: ${titleCase(item.role)}` : "";
   const risk = item.risk_score ? `\nRisk: ${Math.round(item.risk_score * 100)}%` : "";
-  return `${item.id}\nIn: ${formatAmount(item.total_in)}\nOut: ${formatAmount(item.total_out)}${role}${risk}`;
+  const subtitle = item.subtitle ? `\n${item.subtitle}` : "";
+  const hint = item.report_hint ? `\n${item.report_hint}` : "";
+  return `${item.id}${subtitle}\nIn: ${formatAmount(item.total_in)}\nOut: ${formatAmount(item.total_out)}${role}${risk}${hint}`;
 }
 
 function nodeLabel(item) {
+  if (item.kind === "transaction") {
+    return `${item.label || formatAddress(item.id)}`;
+  }
   if (!item.risk_score && !item.role) {
     return "";
-  }
-  if (item.role === "exchange_candidate") {
-    return `${formatAddress(item.id)} [EX]`;
   }
   if (item.role) {
     return `${formatAddress(item.id)} [${roleShort(item.role)}]`;
@@ -508,6 +756,7 @@ function reportFileName(payload) {
 
 function buildExportPackage(payload) {
   return {
+    report_version: payload.report?.report_version || payload.metadata?.report_version || "1.1.0",
     metadata: payload.metadata,
     report: payload.report,
     anomalies: payload.anomalies,
@@ -635,6 +884,55 @@ function roleShort(role) {
     return "ROUTER";
   }
   return value.slice(0, 4).toUpperCase();
+}
+
+function bindNodeInteractions(selection, payload) {
+  selection
+    .on("mouseenter", (event, item) => showGraphPopup(event, item, payload))
+    .on("mousemove", (event, item) => moveGraphPopup(event, item))
+    .on("mouseleave", () => hideGraphPopup());
+}
+
+function showGraphPopup(event, item, payload) {
+  if (!graphPopup) {
+    return;
+  }
+  const report = payload.report || {};
+  const metadata = payload.metadata || {};
+  graphPopup.classList.remove("hidden");
+  graphPopup.innerHTML = `
+    <strong>${escapeHtml(item.kind === "transaction" ? "Transaction" : "Wallet")}</strong>
+    <div class="popup-title">${escapeHtml(item.label || item.id)}</div>
+    <div class="popup-subtitle">${escapeHtml(item.subtitle || item.detail || "")}</div>
+    <div class="popup-line">${escapeHtml(item.report_hint || report.summary || "")}</div>
+    <div class="popup-meta">Role: ${escapeHtml(item.role || "clue")}</div>
+    <div class="popup-meta">Risk: ${Math.round((item.risk_score || 0) * 100)}%</div>
+    <div class="popup-meta">Type: ${escapeHtml(item.kind || "wallet")}</div>
+    <div class="popup-meta">Report: ${escapeHtml(report.title || "Investigation")}</div>
+    <div class="popup-meta">Mode: ${escapeHtml(titleCase(metadata.analysis_profile || ""))}</div>
+  `;
+  moveGraphPopup(event, item);
+}
+
+function moveGraphPopup(event) {
+  if (!graphPopup) {
+    return;
+  }
+  const bounds = chart.getBoundingClientRect();
+  const popupWidth = 260;
+  const popupHeight = 200;
+  const [xPoint, yPoint] = d3.pointer(event, chart);
+  const x = Math.min(bounds.width - popupWidth - 12, Math.max(12, xPoint + 16));
+  const y = Math.min(bounds.height - popupHeight - 12, Math.max(12, yPoint + 16));
+  graphPopup.style.left = `${x}px`;
+  graphPopup.style.top = `${y}px`;
+}
+
+function hideGraphPopup() {
+  if (!graphPopup) {
+    return;
+  }
+  graphPopup.classList.add("hidden");
 }
 
 function setStatus(text, isError = false) {

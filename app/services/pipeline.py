@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from app.core.config import Settings
@@ -7,6 +9,7 @@ from app.core.exceptions import AnalyzerError, DecodeError
 from app.models.schemas import AnalysisMetadata, AnalyzeRequest, DecodedTransferEvent, SankeyPayload
 from app.services.decoder import TransferDecoder
 from app.services.etherscan import EtherscanClient
+from app.services.feature_store import FeatureStore
 from app.services.graph_builder import GraphConstructionFactory
 from app.services.heuristics import ForensicsHeuristicsEngine
 from app.services.ingestion import IngestionEngine
@@ -14,6 +17,9 @@ from app.services.persistence import AnalysisCache, provider_fingerprint
 from app.services.reporting import UseCaseReportBuilder
 from app.services.serializer import D3PayloadSerializer
 from app.services.web3_client import EthereumClient
+
+
+logger = logging.getLogger(__name__)
 
 
 class FlowAnalyzer:
@@ -31,6 +37,7 @@ class FlowAnalyzer:
         self.decoder = TransferDecoder()
         self.graph_factory = GraphConstructionFactory()
         self.heuristics = ForensicsHeuristicsEngine()
+        self.feature_store = FeatureStore(self.heuristics)
         self.report_builder = UseCaseReportBuilder()
         self.serializer = D3PayloadSerializer()
 
@@ -64,11 +71,22 @@ class FlowAnalyzer:
                     warnings.append(f"decode skipped at log {raw_log.get('transactionHash')}:{raw_log.get('logIndex')}: {exc.message}")
 
         graph = self.graph_factory.build(decoded_events, max_depth=request.max_depth)
-        anomalies = self.heuristics.analyze(
+        feature_result = self.feature_store.analyze(
             graph,
             decoded_events,
             narrow_block_window=request.narrow_block_window,
         )
+        anomalies = feature_result.findings
+        finding_counts = Counter(f"{finding.type}:{finding.severity}" for finding in anomalies)
+        if anomalies:
+            logger.info(
+                "forensic_findings_generated",
+                extra={
+                    "finding_total": len(anomalies),
+                    "finding_counts": dict(finding_counts),
+                    "feature_schema_version": feature_result.schema_version,
+                },
+            )
         report = self.report_builder.build(
             graph,
             decoded_events,
@@ -91,9 +109,12 @@ class FlowAnalyzer:
             cache_status="miss" if self.settings.cache_enabled and request.use_cache else "disabled",
             timeline_start_at=request.incident_started_at,
             timeline_end_at=request.complaint_received_at,
+            feature_schema_version=feature_result.schema_version,
+            feature_count=len(feature_result.wallet_features),
             warnings=warnings,
         )
         payload = self.serializer.serialize(graph, anomalies=anomalies, report=report, metadata=metadata)
+        payload.wallet_features = feature_result.wallet_features
         if self.settings.cache_enabled and request.use_cache:
             self.cache.set(request, payload, provider_fingerprint=self.provider_fingerprint)
         return payload
